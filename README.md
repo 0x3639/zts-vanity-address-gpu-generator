@@ -31,7 +31,7 @@ Build and run this on a machine with:
 
 - NVIDIA GPU
 - NVIDIA CUDA Toolkit with `nvcc`
-- CMake 3.24 or newer
+- CMake 3.18 or newer
 - C++17-capable host compiler
 - Optional: Dart SDK for result validation with `znn_sdk_dart`
 
@@ -219,6 +219,13 @@ Use a specific CUDA architecture:
 
 ```bash
 ./run.sh znn --arch 86
+```
+
+If your CMake is older, such as Ubuntu's `cmake 3.22.1`, pass `--arch`
+explicitly:
+
+```bash
+./run.sh deez --arch 86
 ```
 
 Pass search options through to the CUDA binary:
@@ -452,6 +459,23 @@ Do not paste generated secrets into chat, logs, issue trackers, or terminals
 you do not control.
 
 ## Troubleshooting
+
+`CMake 3.24 or higher is required. You are running version 3.22.1`
+
+Pull the latest version of this repo. The project now supports CMake 3.18+.
+
+```bash
+git pull
+./run.sh deez --arch 86
+```
+
+If CMake keeps using an old cached configure, rebuild from a fresh build
+directory:
+
+```bash
+rm -rf build
+./run.sh deez --arch 86
+```
 
 `Failed to find nvcc`
 
