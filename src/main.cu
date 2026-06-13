@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-#define HD __host__ __device__
+#define HD __device__
 #define DEV __device__
 
 using u8 = unsigned char;
@@ -33,11 +33,15 @@ static constexpr int kAddressLength = 40;
 static constexpr int kSeedLength = 64;
 static constexpr int kPrivateKeyLength = 32;
 static constexpr int kPublicKeyLength = 32;
-static constexpr char kBech32Charset[] = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+static constexpr char kHostBech32Charset[] = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
 __constant__ u8 d_base_seed[32];
 __constant__ char d_suffix[41];
 __constant__ int d_suffix_len;
+__device__ __constant__ char kBech32Charset[] =
+    "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+__device__ __constant__ u32 kBech32Generator[5] = {
+    0x3b6a57b2U, 0x26508e6dU, 0x1ea119faU, 0x3d4233ddU, 0x2a1462b3U};
 
 struct SearchResult {
   int found;
@@ -85,13 +89,13 @@ HD static inline void store64_le(u8* x, u64 u) {
   }
 }
 
-static constexpr u64 kSha512Iv[8] = {
+__device__ __constant__ u64 kSha512Iv[8] = {
     0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
     0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
     0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL,
     0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL};
 
-static constexpr u64 kSha512K[80] = {
+__device__ __constant__ u64 kSha512K[80] = {
     0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL,
     0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
     0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL,
@@ -269,15 +273,15 @@ HD static void hmac_sha512(const u8* key, int key_len, const u8* msg, int msg_le
   sha512_hash(outer, 192, out);
 }
 
-static constexpr i64 kGf0[16] = {0};
-static constexpr i64 kGf1[16] = {1};
-static constexpr i64 kEdD2[16] = {
+__device__ __constant__ i64 kGf0[16] = {0};
+__device__ __constant__ i64 kGf1[16] = {1};
+__device__ __constant__ i64 kEdD2[16] = {
     0xf159, 0x26b2, 0x9b94, 0xebd6, 0xb156, 0x8283, 0x149a, 0x00e0,
     0xd130, 0xeef3, 0x80f2, 0x198e, 0xfce7, 0x56df, 0xd9dc, 0x2406};
-static constexpr i64 kEdX[16] = {
+__device__ __constant__ i64 kEdX[16] = {
     0xd51a, 0x8f25, 0x2d60, 0xc956, 0xa7b2, 0x9525, 0xc760, 0x692c,
     0xdc5c, 0xfdd6, 0xe231, 0xc0a4, 0x53fe, 0xcd6e, 0x36d3, 0x2169};
-static constexpr i64 kEdY[16] = {
+__device__ __constant__ i64 kEdY[16] = {
     0x6658, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666,
     0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666};
 
@@ -477,7 +481,7 @@ HD static inline u64 rotl64(u64 x, int c) {
   return (x << c) | (x >> (64 - c));
 }
 
-static constexpr u64 kKeccakRoundConstants[24] = {
+__device__ __constant__ u64 kKeccakRoundConstants[24] = {
     0x0000000000000001ULL, 0x0000000000008082ULL,
     0x800000000000808aULL, 0x8000000080008000ULL,
     0x000000000000808bULL, 0x0000000080000001ULL,
@@ -491,11 +495,11 @@ static constexpr u64 kKeccakRoundConstants[24] = {
     0x8000000080008081ULL, 0x8000000000008080ULL,
     0x0000000080000001ULL, 0x8000000080008008ULL};
 
-static constexpr int kKeccakRho[24] = {
+__device__ __constant__ int kKeccakRho[24] = {
     1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14,
     27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44};
 
-static constexpr int kKeccakPi[24] = {
+__device__ __constant__ int kKeccakPi[24] = {
     10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4,
     15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1};
 
@@ -552,13 +556,11 @@ HD static void sha3_256_32(const u8 input[32], u8 out[32]) {
 }
 
 HD static u32 bech32_polymod_step(u32 chk, u8 value) {
-  static constexpr u32 generator[5] = {
-      0x3b6a57b2U, 0x26508e6dU, 0x1ea119faU, 0x3d4233ddU, 0x2a1462b3U};
   const u8 top = chk >> 25;
   chk = ((chk & 0x1ffffffU) << 5) ^ value;
   for (int i = 0; i < 5; ++i) {
     if ((top >> i) & 1) {
-      chk ^= generator[i];
+      chk ^= kBech32Generator[i];
     }
   }
   return chk;
@@ -603,7 +605,7 @@ HD static void bech32_encode_zenon_address(const u8 core[20], char out[kAddressL
 }
 
 HD static void derive_private_key(const u8 seed[64], u64 account_index, u8 private_key[32]) {
-  static constexpr u8 curve[] = {
+  const u8 curve[12] = {
       'e', 'd', '2', '5', '5', '1', '9', ' ', 's', 'e', 'e', 'd'};
   u8 iout[64];
   hmac_sha512(curve, 12, seed, 64, iout);
@@ -784,7 +786,7 @@ static std::string to_hex(const u8* data, size_t len) {
 }
 
 static bool is_bech32_char(char c) {
-  for (const char* p = kBech32Charset; *p; ++p) {
+  for (const char* p = kHostBech32Charset; *p; ++p) {
     if (*p == c) return true;
   }
   return false;
