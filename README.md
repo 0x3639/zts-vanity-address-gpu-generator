@@ -51,6 +51,19 @@ nvidia-smi
 
 These commands are the fastest path on a fresh NVIDIA Linux machine.
 
+If you are already in the repo and saw `error: cmake is required`, run:
+
+```bash
+apt-get update
+apt-get install -y cmake
+```
+
+Or install the base prerequisites with the helper:
+
+```bash
+./setup_ubuntu.sh
+```
+
 1. Log in to the GPU machine.
 
 ```bash
@@ -73,6 +86,19 @@ sudo apt update
 sudo apt install -y git build-essential cmake
 ```
 
+If you are root inside a Docker container, use `apt-get` directly:
+
+```bash
+apt-get update
+apt-get install -y git build-essential cmake ca-certificates
+```
+
+You can also run the repository helper after cloning:
+
+```bash
+./setup_ubuntu.sh
+```
+
 4. Install the CUDA Toolkit if `nvcc` is missing.
 
 ```bash
@@ -83,6 +109,13 @@ If that fails, install CUDA with one of these approaches:
 
 ```bash
 sudo apt install -y nvidia-cuda-toolkit
+```
+
+If you are root inside a Docker container:
+
+```bash
+apt-get update
+apt-get install -y nvidia-cuda-toolkit
 ```
 
 For the newest NVIDIA-packaged toolkit, use NVIDIA's official Linux CUDA
@@ -100,6 +133,13 @@ After installation, open a new shell or add CUDA to your path if needed:
 export PATH=/usr/local/cuda/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}
 nvcc --version
+```
+
+If you are using Docker, start from a CUDA `devel` image. CUDA `runtime` images
+usually do not include `nvcc`.
+
+```text
+nvidia/cuda:12.6.3-devel-ubuntu24.04
 ```
 
 5. Clone this repository.

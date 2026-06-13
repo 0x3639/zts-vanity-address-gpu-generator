@@ -59,6 +59,48 @@ die() {
   exit 1
 }
 
+missing_tool() {
+  local tool="$1"
+
+  case "$tool" in
+    cmake)
+      cat >&2 <<'MSG'
+error: cmake is required.
+
+On Ubuntu/Debian, run:
+  apt-get update
+  apt-get install -y cmake
+
+Or run this repository helper:
+  ./setup_ubuntu.sh
+MSG
+      ;;
+    nvcc)
+      cat >&2 <<'MSG'
+error: nvcc was not found.
+
+Install the NVIDIA CUDA Toolkit, then run ./run.sh again.
+
+On Ubuntu/Debian, try:
+  apt-get update
+  apt-get install -y nvidia-cuda-toolkit
+
+For NVIDIA's latest toolkit packages:
+  https://developer.nvidia.com/cuda-downloads
+
+If you are inside Docker, use a CUDA devel image, not a runtime-only image.
+Example:
+  nvidia/cuda:12.6.3-devel-ubuntu24.04
+MSG
+      ;;
+    *)
+      echo "error: $tool is required" >&2
+      ;;
+  esac
+
+  exit 1
+}
+
 require_value() {
   local option="$1"
   local value="${2:-}"
@@ -134,8 +176,8 @@ while (($#)); do
 done
 
 if [[ "$DO_BUILD" -eq 1 ]]; then
-  command -v cmake >/dev/null 2>&1 || die "cmake is required"
-  command -v nvcc >/dev/null 2>&1 || die "nvcc was not found; install the NVIDIA CUDA Toolkit"
+  command -v cmake >/dev/null 2>&1 || missing_tool cmake
+  command -v nvcc >/dev/null 2>&1 || missing_tool nvcc
 
   CMAKE_ARGS=(-S "$ROOT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE")
   if [[ -n "$CUDA_ARCH" ]]; then
