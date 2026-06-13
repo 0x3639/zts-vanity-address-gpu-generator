@@ -1,106 +1,273 @@
-# ZTS Vanity Address Generator
+# Zenon CUDA Vanity Address Generator
 
-CUDA-powered Zenon wallet vanity search.
+CUDA-powered vanity search for Zenon wallet addresses.
 
-This tool searches Zenon wallet addresses (`z1...`) for a suffix at the end of
-the address, then prints the matching address plus the 64-byte seed hex used by
-Zenon SDK's `KeyStore.fromSeed(seedHex)`.
-
-It is modeled after [`0x3639/znn-address-generator`](https://github.com/0x3639/znn-address-generator.git),
-but the brute-force loop runs on an NVIDIA CUDA GPU.
-
-## What It Searches
-
-The CUDA kernel generates candidate 64-byte seeds from a private 32-byte base
-seed and a counter:
-
-```text
-candidate_seed = SHA512(base_seed || counter)
-```
-
-For every candidate seed it derives the Zenon private key using the SDK path:
-
-```text
-m/44'/73404'/<account-index>'
-```
-
-Then it computes:
-
-```text
-Ed25519 public key -> SHA3-256(public key)[0..19] -> Bech32 z1 address
-```
-
-The suffix is matched against the end of the full Bech32 address, including the
-checksum characters. Example: `--suffix znn` finds addresses ending in `znn`.
-
-## Build
-
-Requires an NVIDIA GPU and CUDA Toolkit with `nvcc`.
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-```
-
-If CMake cannot infer your GPU architecture, set it manually:
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86
-```
-
-## Run
-
-```bash
-./build/znn-vanity-cuda --suffix znn
-```
-
-Useful options:
-
-```text
---suffix <text>          Required vanity suffix, matched at the end
---account-index <n>      Derivation account index, default 0
---blocks <n>             CUDA blocks per launch, default 4096
---threads <n>            CUDA threads per block, default 128
---start <n>              Starting counter, default 0
---max-attempts <n>       Stop after n candidates, default 0 means unlimited
---base-seed <hex>        32-byte hex base seed for reproducible search
---output <file>          Append the match to a file
-```
-
-Example:
-
-```bash
-./build/znn-vanity-cuda --suffix moon --blocks 8192 --threads 128 --output results/moon.txt
-```
-
-Expected attempts are roughly `32^suffix_length`, because Zenon addresses use
-the Bech32 character set.
-
-## Validate A Result
-
-After the CUDA tool prints a match, verify the address with the official SDK:
-
-```bash
-dart pub get
-dart run tools/validate_seed.dart <seed_hex> 0
-```
-
-The printed address should match the CUDA result.
-
-## Important
-
-Treat `seed_hex` as the wallet secret. Anyone who has it can control the
-matching address. Also keep `base_seed_hex` private if you plan to resume or
-reproduce a search stream.
-
-This first CUDA backend searches SDK seed hex values, not BIP39 mnemonic
-sentences. The resulting seed can be used with:
+This tool brute-forces Zenon `z1...` wallet addresses on an NVIDIA GPU and
+prints a matching address plus the `seed_hex` needed to recreate it with
+`znn_sdk_dart`:
 
 ```dart
 final store = KeyStore.fromSeed(seedHex);
 final address = await store.getKeyPair(0).address;
 ```
 
-BIP39 mnemonic vanity search is slower and needs an additional GPU PBKDF2-HMAC-
-SHA512 path over the generated mnemonic sentence. That can be added as a second
-mode after the raw SDK-seed CUDA path is benchmarked.
+It is modeled after
+[`0x3639/znn-address-generator`](https://github.com/0x3639/znn-address-generator.git),
+but moves the hot search loop to CUDA.
+
+## Current Scope
+
+The current CUDA backend searches Zenon wallet addresses that start with `z1`.
+It does not yet generate Zenon token standards that start with `zts1`, and it
+does not yet produce BIP39 mnemonic phrases.
+
+The result is still usable by the Zenon SDK through `KeyStore.fromSeed(seedHex)`.
+BIP39 mnemonic search can be added later as a separate mode, but it requires a
+GPU PBKDF2-HMAC-SHA512 path over generated mnemonic sentences.
+
+## Requirements
+
+Build and run this on a machine with:
+
+- NVIDIA GPU
+- NVIDIA CUDA Toolkit with `nvcc`
+- CMake 3.24 or newer
+- C++17-capable host compiler
+- Optional: Dart SDK for result validation with `znn_sdk_dart`
+
+Check the CUDA compiler:
+
+```bash
+nvcc --version
+```
+
+Check the GPU:
+
+```bash
+nvidia-smi
+```
+
+## Get The Code
+
+```bash
+git clone https://github.com/0x3639/zts-vanity-address-gpu-generator.git
+cd zts-vanity-address-gpu-generator
+```
+
+## Build
+
+Default release build:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+If CMake cannot infer the CUDA architecture, set it manually. Examples:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86
+cmake --build build -j
+```
+
+Common architecture values include `75` for many RTX 20 cards, `86` for many
+RTX 30 cards, `89` for many RTX 40 cards, and `90` for H100-class cards. Use
+the value that matches your GPU.
+
+If CUDA is installed outside the default location, pass `CUDAToolkit_ROOT`:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=/usr/local/cuda
+cmake --build build -j
+```
+
+## Quick Start
+
+Find a Zenon address ending in `znn`:
+
+```bash
+./build/znn-vanity-cuda --suffix znn
+```
+
+Save the match to a file:
+
+```bash
+mkdir -p results
+./build/znn-vanity-cuda --suffix moon --output results/moon.txt
+```
+
+Use a larger launch size on a strong GPU:
+
+```bash
+./build/znn-vanity-cuda --suffix moon --blocks 8192 --threads 128
+```
+
+## Command Options
+
+```text
+--suffix <text>          Required vanity suffix, matched at end of z1 address
+--account-index <n>      Hardened account index, default 0
+--blocks <n>             CUDA blocks per launch, default 4096
+--threads <n>            CUDA threads per block, default 128
+--start <n>              Starting counter, default 0
+--max-attempts <n>       Stop after n candidates, default unlimited
+--base-seed <hex>        32-byte hex base seed for reproducible search
+--output <file>          Append match details to file
+--help                   Show CLI help
+```
+
+## Suffix Rules
+
+Suffixes are matched at the end of the full Bech32 address, including checksum
+characters.
+
+Valid suffix characters are Bech32 characters:
+
+```text
+qpzry9x8gf2tvdw0s3jn54khce6mua7l
+```
+
+That means `1`, `b`, `i`, and `o` are not valid. The tool lowercases suffix
+input automatically.
+
+Expected work is roughly:
+
+```text
+32^suffix_length attempts
+```
+
+Examples:
+
+```text
+3 characters: about 32,768 attempts
+4 characters: about 1,048,576 attempts
+5 characters: about 33,554,432 attempts
+6 characters: about 1,073,741,824 attempts
+```
+
+## Output
+
+A successful run prints fields like:
+
+```text
+Found match
+address: z1...
+seed_hex: ...
+private_key_hex: ...
+public_key_hex: ...
+derivation_path: m/44'/73404'/0'
+counter: ...
+base_seed_hex: ...
+checked: ...
+elapsed_seconds: ...
+rate: ... seeds/sec
+```
+
+Field meanings:
+
+- `address`: matching Zenon wallet address.
+- `seed_hex`: secret wallet seed to use with `KeyStore.fromSeed(seedHex)`.
+- `private_key_hex`: derived private key for the reported account index.
+- `public_key_hex`: public key used to compute the address.
+- `derivation_path`: Zenon SDK derivation path.
+- `counter`: counter that generated this candidate from `base_seed_hex`.
+- `base_seed_hex`: 32-byte search-stream seed.
+- `checked`: number of candidates checked in this run.
+- `rate`: measured candidate rate.
+
+## Reproduce Or Resume A Search
+
+By default the tool creates a random `base_seed_hex` each run. To make a search
+reproducible, provide your own 32-byte base seed:
+
+```bash
+./build/znn-vanity-cuda \
+  --suffix moon \
+  --base-seed 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+```
+
+To resume from a later counter, use the same `--base-seed` and pass `--start`:
+
+```bash
+./build/znn-vanity-cuda \
+  --suffix moon \
+  --base-seed 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f \
+  --start 50000000
+```
+
+To split work across multiple machines, give every machine the same
+`--base-seed` but a different `--start` range and `--max-attempts`:
+
+```bash
+./build/znn-vanity-cuda --suffix moon --base-seed <hex> --start 0        --max-attempts 100000000
+./build/znn-vanity-cuda --suffix moon --base-seed <hex> --start 100000000 --max-attempts 100000000
+./build/znn-vanity-cuda --suffix moon --base-seed <hex> --start 200000000 --max-attempts 100000000
+```
+
+## Validate A Result
+
+Use the official Zenon Dart SDK helper after a match:
+
+```bash
+dart pub get
+dart run tools/validate_seed.dart <seed_hex> 0
+```
+
+The printed address should exactly match the CUDA result. The second argument
+is the account index; use the same value you passed to `--account-index`.
+
+## Use The Seed In Dart
+
+```dart
+import 'package:znn_sdk_dart/znn_sdk_dart.dart';
+
+Future<void> main() async {
+  const seedHex = '<seed_hex from CUDA output>';
+  final store = KeyStore.fromSeed(seedHex);
+  final address = await store.getKeyPair(0).address;
+  print(address);
+}
+```
+
+## Security Notes
+
+Treat `seed_hex` as the wallet secret. Anyone who has it can control the
+matching address.
+
+Also keep `base_seed_hex` private if you plan to resume or reproduce a search
+stream. `base_seed_hex` plus `counter` recreates the candidate seed stream.
+
+Do not paste generated secrets into chat, logs, issue trackers, or terminals
+you do not control.
+
+## Troubleshooting
+
+`Failed to find nvcc`
+
+Install the NVIDIA CUDA Toolkit or point CMake at it:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=/usr/local/cuda
+```
+
+`CMAKE_CUDA_ARCHITECTURES must be non-empty`
+
+Pass your GPU architecture explicitly:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86
+```
+
+`Invalid suffix character`
+
+Use only Bech32 characters:
+
+```text
+qpzry9x8gf2tvdw0s3jn54khce6mua7l
+```
+
+`No match found after ... attempts`
+
+The run hit `--max-attempts` before finding a match. Increase
+`--max-attempts`, shorten the suffix, or resume with the same `--base-seed`
+and a later `--start`.
