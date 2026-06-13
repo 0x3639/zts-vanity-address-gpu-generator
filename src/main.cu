@@ -1,7 +1,7 @@
 // CUDA Zenon vanity address search.
 //
-// This searches raw Zenon SDK seed hex values. A matching seed can be loaded
-// with KeyStore.fromSeed(seedHex) in znn_sdk_dart.
+// This searches 24-word BIP39 mnemonic entropy. A matching result can be loaded
+// with KeyStore.fromMnemonic(seedWords) or KeyStore.fromSeed(seedHex).
 
 #include <cuda_runtime.h>
 
@@ -24,6 +24,7 @@
 #define DEV __device__
 
 using u8 = unsigned char;
+using u16 = unsigned short;
 using u32 = unsigned int;
 using u64 = unsigned long long;
 using i64 = long long;
@@ -31,9 +32,14 @@ using gf = i64[16];
 
 static constexpr int kAddressLength = 40;
 static constexpr int kSeedLength = 64;
+static constexpr int kEntropyLength = 32;
 static constexpr int kPrivateKeyLength = 32;
 static constexpr int kPublicKeyLength = 32;
+static constexpr int kMnemonicWords = 24;
+static constexpr int kMnemonicMaxBytes = 215;
 static constexpr char kHostBech32Charset[] = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+#include "bip39_words.cuh"
 
 __constant__ u8 d_base_seed[32];
 __constant__ char d_suffix[41];
@@ -46,9 +52,11 @@ __device__ __constant__ u32 kBech32Generator[5] = {
 struct SearchResult {
   int found;
   u64 counter;
+  u8 entropy[kEntropyLength];
   u8 seed[kSeedLength];
   u8 private_key[kPrivateKeyLength];
   u8 public_key[kPublicKeyLength];
+  u16 word_indices[kMnemonicWords];
   char address[kAddressLength + 1];
 };
 
@@ -86,6 +94,148 @@ HD static inline void store64_le(u8* x, u64 u) {
   for (int i = 0; i < 8; ++i) {
     x[i] = static_cast<u8>(u & 0xff);
     u >>= 8;
+  }
+}
+
+HD static inline u32 rotr32(u32 x, int c) {
+  return (x >> c) | (x << (32 - c));
+}
+
+HD static inline u32 load32_be(const u8* x) {
+  u32 u = 0;
+  for (int i = 0; i < 4; ++i) {
+    u = (u << 8) | x[i];
+  }
+  return u;
+}
+
+HD static inline void store32_be(u8* x, u32 u) {
+  for (int i = 3; i >= 0; --i) {
+    x[i] = static_cast<u8>(u & 0xff);
+    u >>= 8;
+  }
+}
+
+__device__ __constant__ u32 kSha256Iv[8] = {
+    0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
+    0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U};
+
+__device__ __constant__ u32 kSha256K[64] = {
+    0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
+    0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+    0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
+    0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+    0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU,
+    0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+    0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U,
+    0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+    0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U,
+    0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+    0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
+    0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+    0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U,
+    0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+    0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
+    0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U};
+
+HD static inline u32 sha256_ch(u32 x, u32 y, u32 z) {
+  return (x & y) ^ (~x & z);
+}
+
+HD static inline u32 sha256_maj(u32 x, u32 y, u32 z) {
+  return (x & y) ^ (x & z) ^ (y & z);
+}
+
+HD static inline u32 sha256_big0(u32 x) {
+  return rotr32(x, 2) ^ rotr32(x, 13) ^ rotr32(x, 22);
+}
+
+HD static inline u32 sha256_big1(u32 x) {
+  return rotr32(x, 6) ^ rotr32(x, 11) ^ rotr32(x, 25);
+}
+
+HD static inline u32 sha256_small0(u32 x) {
+  return rotr32(x, 7) ^ rotr32(x, 18) ^ (x >> 3);
+}
+
+HD static inline u32 sha256_small1(u32 x) {
+  return rotr32(x, 17) ^ rotr32(x, 19) ^ (x >> 10);
+}
+
+HD static void sha256_compress(u32 state[8], const u8 block[64]) {
+  u32 w[64];
+  for (int i = 0; i < 16; ++i) {
+    w[i] = load32_be(block + 4 * i);
+  }
+  for (int i = 16; i < 64; ++i) {
+    w[i] = sha256_small1(w[i - 2]) + w[i - 7] + sha256_small0(w[i - 15]) + w[i - 16];
+  }
+
+  u32 a = state[0];
+  u32 b = state[1];
+  u32 c = state[2];
+  u32 d = state[3];
+  u32 e = state[4];
+  u32 f = state[5];
+  u32 g = state[6];
+  u32 h = state[7];
+
+  for (int i = 0; i < 64; ++i) {
+    const u32 t1 = h + sha256_big1(e) + sha256_ch(e, f, g) + kSha256K[i] + w[i];
+    const u32 t2 = sha256_big0(a) + sha256_maj(a, b, c);
+    h = g;
+    g = f;
+    f = e;
+    e = d + t1;
+    d = c;
+    c = b;
+    b = a;
+    a = t1 + t2;
+  }
+
+  state[0] += a;
+  state[1] += b;
+  state[2] += c;
+  state[3] += d;
+  state[4] += e;
+  state[5] += f;
+  state[6] += g;
+  state[7] += h;
+}
+
+HD static void sha256_hash(const u8* msg, u64 len, u8 out[32]) {
+  u32 state[8];
+  for (int i = 0; i < 8; ++i) {
+    state[i] = kSha256Iv[i];
+  }
+
+  u64 offset = 0;
+  while (len - offset >= 64) {
+    sha256_compress(state, msg + offset);
+    offset += 64;
+  }
+
+  u8 block[128];
+  for (int i = 0; i < 128; ++i) {
+    block[i] = 0;
+  }
+
+  const u64 rem = len - offset;
+  for (u64 i = 0; i < rem; ++i) {
+    block[i] = msg[offset + i];
+  }
+  block[rem] = 0x80;
+
+  const u64 pad_len = (rem < 56) ? 64 : 128;
+  store64_be(block + pad_len - 8, len << 3);
+
+  sha256_compress(state, block);
+  if (pad_len == 128) {
+    sha256_compress(state, block + 64);
+  }
+
+  for (int i = 0; i < 8; ++i) {
+    store32_be(out + 4 * i, state[i]);
   }
 }
 
@@ -271,6 +421,80 @@ HD static void hmac_sha512(const u8* key, int key_len, const u8* msg, int msg_le
     outer[128 + i] = inner_hash[i];
   }
   sha512_hash(outer, 192, out);
+}
+
+HD static int entropy_bit(const u8 entropy[kEntropyLength], int bit_index) {
+  return (entropy[bit_index / 8] >> (7 - (bit_index % 8))) & 1;
+}
+
+HD static int checksum_bit(const u8 checksum[32], int bit_index) {
+  return (checksum[bit_index / 8] >> (7 - (bit_index % 8))) & 1;
+}
+
+HD static void mnemonic_indices_from_entropy(const u8 entropy[kEntropyLength],
+                                             u16 word_indices[kMnemonicWords]) {
+  u8 checksum[32];
+  sha256_hash(entropy, kEntropyLength, checksum);
+
+  for (int word = 0; word < kMnemonicWords; ++word) {
+    int value = 0;
+    for (int bit = 0; bit < 11; ++bit) {
+      const int stream_bit = word * 11 + bit;
+      const int next_bit = stream_bit < 256
+                               ? entropy_bit(entropy, stream_bit)
+                               : checksum_bit(checksum, stream_bit - 256);
+      value = (value << 1) | next_bit;
+    }
+    word_indices[word] = static_cast<u16>(value);
+  }
+}
+
+HD static int build_mnemonic_sentence(const u16 word_indices[kMnemonicWords],
+                                      u8 sentence[kMnemonicMaxBytes + 1]) {
+  int pos = 0;
+  for (int word = 0; word < kMnemonicWords; ++word) {
+    if (word > 0) {
+      sentence[pos++] = ' ';
+    }
+
+    const int index = word_indices[word];
+    const int length = kBip39WordLengths[index];
+    for (int i = 0; i < length; ++i) {
+      sentence[pos++] = static_cast<u8>(kBip39Words[index][i]);
+    }
+  }
+  sentence[pos] = 0;
+  return pos;
+}
+
+HD static void pbkdf2_hmac_sha512_bip39(const u8* password, int password_len, u8 seed[kSeedLength]) {
+  const u8 salt_block[12] = {
+      'm', 'n', 'e', 'm', 'o', 'n', 'i', 'c', 0x00, 0x00, 0x00, 0x01};
+
+  u8 u[64];
+  u8 next[64];
+  hmac_sha512(password, password_len, salt_block, 12, u);
+
+  for (int i = 0; i < 64; ++i) {
+    seed[i] = u[i];
+  }
+
+  for (int round = 1; round < 2048; ++round) {
+    hmac_sha512(password, password_len, u, 64, next);
+    for (int i = 0; i < 64; ++i) {
+      u[i] = next[i];
+      seed[i] ^= next[i];
+    }
+  }
+}
+
+HD static void bip39_seed_from_entropy(const u8 entropy[kEntropyLength],
+                                       u16 word_indices[kMnemonicWords],
+                                       u8 seed[kSeedLength]) {
+  u8 sentence[kMnemonicMaxBytes + 1];
+  mnemonic_indices_from_entropy(entropy, word_indices);
+  const int sentence_len = build_mnemonic_sentence(word_indices, sentence);
+  pbkdf2_hmac_sha512_bip39(sentence, sentence_len, seed);
 }
 
 __device__ __constant__ i64 kGf0[16] = {0};
@@ -644,13 +868,17 @@ HD static void derive_private_key(const u8 seed[64], u64 account_index, u8 priva
   }
 }
 
-DEV static void candidate_seed_from_counter(u64 counter, u8 seed[64]) {
+DEV static void candidate_entropy_from_counter(u64 counter, u8 entropy[kEntropyLength]) {
   u8 msg[40];
+  u8 digest[64];
   for (int i = 0; i < 32; ++i) {
     msg[i] = d_base_seed[i];
   }
   store64_le(msg + 32, counter);
-  sha512_hash(msg, 40, seed);
+  sha512_hash(msg, 40, digest);
+  for (int i = 0; i < kEntropyLength; ++i) {
+    entropy[i] = digest[i];
+  }
 }
 
 HD static void zenon_address_from_seed(const u8 seed[64], u64 account_index,
@@ -689,22 +917,31 @@ __global__ void search_kernel(u64 start_counter, u64 count, u64 account_index,
   }
 
   const u64 counter = start_counter + idx;
+  u8 entropy[kEntropyLength];
   u8 seed[64];
   u8 private_key[32];
   u8 public_key[32];
+  u16 word_indices[kMnemonicWords];
   char address[kAddressLength + 1];
 
-  candidate_seed_from_counter(counter, seed);
+  candidate_entropy_from_counter(counter, entropy);
+  bip39_seed_from_entropy(entropy, word_indices, seed);
   zenon_address_from_seed(seed, account_index, private_key, public_key, address);
 
   if (address_matches_suffix(address) && atomicCAS(&result->found, 0, 1) == 0) {
     result->counter = counter;
+    for (int i = 0; i < kEntropyLength; ++i) {
+      result->entropy[i] = entropy[i];
+    }
     for (int i = 0; i < 64; ++i) {
       result->seed[i] = seed[i];
     }
     for (int i = 0; i < 32; ++i) {
       result->private_key[i] = private_key[i];
       result->public_key[i] = public_key[i];
+    }
+    for (int i = 0; i < kMnemonicWords; ++i) {
+      result->word_indices[i] = word_indices[i];
     }
     for (int i = 0; i <= kAddressLength; ++i) {
       result->address[i] = address[i];
@@ -863,12 +1100,29 @@ static Options parse_args(int argc, char** argv) {
   return opts;
 }
 
+static std::string seed_words_from_indices(const u16 word_indices[kMnemonicWords]) {
+  std::ostringstream oss;
+  for (int i = 0; i < kMnemonicWords; ++i) {
+    if (i > 0) {
+      oss << ' ';
+    }
+    const auto index = word_indices[i];
+    if (index >= 2048) {
+      throw std::runtime_error("invalid BIP39 word index in result");
+    }
+    oss << kHostBip39Words[index];
+  }
+  return oss.str();
+}
+
 static std::string format_result(const SearchResult& result,
                                  const std::vector<u8>& base_seed,
                                  u64 account_index, u64 checked,
                                  double seconds) {
   std::ostringstream oss;
   oss << "address: " << result.address << "\n";
+  oss << "seed_words: " << seed_words_from_indices(result.word_indices) << "\n";
+  oss << "entropy_hex: " << to_hex(result.entropy, kEntropyLength) << "\n";
   oss << "seed_hex: " << to_hex(result.seed, 64) << "\n";
   oss << "private_key_hex: " << to_hex(result.private_key, 32) << "\n";
   oss << "public_key_hex: " << to_hex(result.public_key, 32) << "\n";

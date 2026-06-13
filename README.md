@@ -3,11 +3,11 @@
 CUDA-powered vanity search for Zenon wallet addresses.
 
 This tool brute-forces Zenon `z1...` wallet addresses on an NVIDIA GPU and
-prints a matching address plus the `seed_hex` needed to recreate it with
-`znn_sdk_dart`:
+prints a matching address, 24 BIP39 seed words, the derived `seed_hex`, and the
+private key.
 
 ```dart
-final store = KeyStore.fromSeed(seedHex);
+final store = KeyStore.fromMnemonic(seedWords);
 final address = await store.getKeyPair(0).address;
 ```
 
@@ -18,12 +18,13 @@ but moves the hot search loop to CUDA.
 ## Current Scope
 
 The current CUDA backend searches Zenon wallet addresses that start with `z1`.
-It does not yet generate Zenon token standards that start with `zts1`, and it
-does not yet produce BIP39 mnemonic phrases.
+It does not yet generate Zenon token standards that start with `zts1`. It
+always generates 24-word English BIP39 mnemonic phrases.
 
-The result is still usable by the Zenon SDK through `KeyStore.fromSeed(seedHex)`.
-BIP39 mnemonic search can be added later as a separate mode, but it requires a
-GPU PBKDF2-HMAC-SHA512 path over generated mnemonic sentences.
+The result is usable by the Zenon SDK through either
+`KeyStore.fromMnemonic(seedWords)` or `KeyStore.fromSeed(seedHex)`.
+Because each candidate now derives a real BIP39 seed with PBKDF2-HMAC-SHA512,
+throughput will be lower than the older raw-seed search path.
 
 ## Requirements
 
@@ -192,6 +193,7 @@ Install Dart if needed, then run:
 
 ```bash
 dart pub get
+dart run tools/validate_mnemonic.dart word1 word2 ... word24 0
 dart run tools/validate_seed.dart <seed_hex_from_output> 0
 ```
 
@@ -370,6 +372,8 @@ A successful run prints fields like:
 ```text
 Found match
 address: z1...
+seed_words: ...
+entropy_hex: ...
 seed_hex: ...
 private_key_hex: ...
 public_key_hex: ...
@@ -384,7 +388,9 @@ rate: ... seeds/sec
 Field meanings:
 
 - `address`: matching Zenon wallet address.
-- `seed_hex`: secret wallet seed to use with `KeyStore.fromSeed(seedHex)`.
+- `seed_words`: 24 English BIP39 words to use with `KeyStore.fromMnemonic(...)`.
+- `entropy_hex`: BIP39 entropy that produced the seed words.
+- `seed_hex`: BIP39 PBKDF2 seed to use with `KeyStore.fromSeed(seedHex)`.
 - `private_key_hex`: derived private key for the reported account index.
 - `public_key_hex`: public key used to compute the address.
 - `derivation_path`: Zenon SDK derivation path.
@@ -428,20 +434,21 @@ Use the official Zenon Dart SDK helper after a match:
 
 ```bash
 dart pub get
+dart run tools/validate_mnemonic.dart word1 word2 ... word24 0
 dart run tools/validate_seed.dart <seed_hex> 0
 ```
 
-The printed address should exactly match the CUDA result. The second argument
-is the account index; use the same value you passed to `--account-index`.
+Both commands should print the CUDA result address. The last argument is the
+account index; use the same value you passed to `--account-index`.
 
-## Use The Seed In Dart
+## Use The Seed Words In Dart
 
 ```dart
 import 'package:znn_sdk_dart/znn_sdk_dart.dart';
 
 Future<void> main() async {
-  const seedHex = '<seed_hex from CUDA output>';
-  final store = KeyStore.fromSeed(seedHex);
+  const seedWords = '<seed_words from CUDA output>';
+  final store = KeyStore.fromMnemonic(seedWords);
   final address = await store.getKeyPair(0).address;
   print(address);
 }
@@ -449,8 +456,8 @@ Future<void> main() async {
 
 ## Security Notes
 
-Treat `seed_hex` as the wallet secret. Anyone who has it can control the
-matching address.
+Treat `seed_words`, `entropy_hex`, `seed_hex`, and `private_key_hex` as wallet
+secrets. Anyone who has any of them can control the matching address.
 
 Also keep `base_seed_hex` private if you plan to resume or reproduce a search
 stream. `base_seed_hex` plus `counter` recreates the candidate seed stream.

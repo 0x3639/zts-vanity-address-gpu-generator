@@ -1,9 +1,11 @@
 .cache/
+.dart_tool/
 .vscode/
 build/
 results/
 *.log
 *.txt
+pubspec.lock
 !README.md
 !LICENSE
 !CMakeLists.txt
