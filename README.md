@@ -54,7 +54,75 @@ git clone https://github.com/0x3639/zts-vanity-address-gpu-generator.git
 cd zts-vanity-address-gpu-generator
 ```
 
-## Build
+## Easy Script
+
+The easiest way to build and run is the wrapper script:
+
+```bash
+./run.sh znn
+```
+
+That command configures/builds the CUDA binary if needed, creates `results/`,
+runs the search for an address ending in `znn`, and saves the match to a
+timestamped file such as `results/znn-20260613_153000.txt`.
+
+If your checkout did not preserve the executable bit, run:
+
+```bash
+chmod +x run.sh
+```
+
+Use a specific CUDA architecture:
+
+```bash
+./run.sh znn --arch 86
+```
+
+Pass search options through to the CUDA binary:
+
+```bash
+./run.sh moon --blocks 8192 --threads 128
+```
+
+Run without auto-saving:
+
+```bash
+./run.sh moon --no-output
+```
+
+Build only:
+
+```bash
+./run.sh --build-only --arch 86
+```
+
+Run an existing build without rebuilding:
+
+```bash
+./run.sh moon --no-build
+```
+
+Wrapper options:
+
+```text
+--arch <n>        Set CMAKE_CUDA_ARCHITECTURES, e.g. 86 or 89
+--build-only      Configure and build, then exit
+--no-build        Run existing build/znn-vanity-cuda without building
+--no-output       Do not auto-save to results/<suffix>-<timestamp>.txt
+--help, -h        Show wrapper help
+```
+
+Environment variables:
+
+```text
+CUDA_ARCH=86             Same as --arch 86
+BUILD_DIR=/path/build    Override build directory
+CMAKE_BUILD_TYPE=Debug   Override build type
+CUDAToolkit_ROOT=/path   Forwarded to CMake when set
+JOBS=8                   Build parallelism
+```
+
+## Manual Build
 
 Default release build:
 
@@ -81,7 +149,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=/usr/local/cud
 cmake --build build -j
 ```
 
-## Quick Start
+## Manual Run
 
 Find a Zenon address ending in `znn`:
 
