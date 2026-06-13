@@ -1,0 +1,9 @@
+.cache/
+.vscode/
+build/
+results/
+*.log
+*.txt
+!README.md
+!LICENSE
+!CMakeLists.txt

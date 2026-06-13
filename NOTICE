@@ -1,0 +1,7 @@
+The Ed25519 field arithmetic and basepoint scalar multiplication in
+src/main.cu are adapted from TweetNaCl's compact public-domain implementation.
+
+Zenon derivation and address formatting follow znn_sdk_dart:
+- seed hex -> SLIP-0010 Ed25519 path m/44'/73404'/<account-index>'
+- Ed25519 public key -> SHA3-256(public key)[0..19]
+- Bech32 HRP "z" with 20-byte user address core
