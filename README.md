@@ -47,12 +47,115 @@ Check the GPU:
 nvidia-smi
 ```
 
-## Get The Code
+## Fresh Ubuntu/Debian Setup
+
+These commands are the fastest path on a fresh NVIDIA Linux machine.
+
+1. Log in to the GPU machine.
+
+```bash
+ssh <user>@<gpu-machine>
+```
+
+2. Confirm the NVIDIA driver can see the GPU.
+
+```bash
+nvidia-smi
+```
+
+If this command is missing or does not show a GPU, install/fix the NVIDIA
+driver before continuing.
+
+3. Install common build tools.
+
+```bash
+sudo apt update
+sudo apt install -y git build-essential cmake
+```
+
+4. Install the CUDA Toolkit if `nvcc` is missing.
+
+```bash
+nvcc --version
+```
+
+If that fails, install CUDA with one of these approaches:
+
+```bash
+sudo apt install -y nvidia-cuda-toolkit
+```
+
+For the newest NVIDIA-packaged toolkit, use NVIDIA's official Linux CUDA
+instructions and select your distro, version, architecture, and the `deb
+(network)` installer:
+
+```text
+https://docs.nvidia.com/cuda/cuda-installation-guide-linux/
+https://developer.nvidia.com/cuda-downloads
+```
+
+After installation, open a new shell or add CUDA to your path if needed:
+
+```bash
+export PATH=/usr/local/cuda/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}
+nvcc --version
+```
+
+5. Clone this repository.
 
 ```bash
 git clone https://github.com/0x3639/zts-vanity-address-gpu-generator.git
 cd zts-vanity-address-gpu-generator
 ```
+
+6. Make the wrapper executable.
+
+```bash
+chmod +x run.sh
+```
+
+7. Pick your CUDA architecture.
+
+Use `86` if you are unsure and are on a common RTX 30/A10/A40/A6000 machine.
+Use this quick guide for common GPUs:
+
+```text
+T4 / RTX 20xx              75
+A100                       80
+RTX 30xx / A10 / A40       86
+L4 / L40 / RTX 40xx        89
+H100 / H200                90
+```
+
+8. Build and run a short suffix search.
+
+```bash
+./run.sh znn --arch 86
+```
+
+Replace `86` with the architecture for your GPU. Replace `znn` with the suffix
+you want at the end of the address.
+
+9. Run a real search and save the result automatically.
+
+```bash
+./run.sh moon --arch 86 --blocks 8192 --threads 128
+```
+
+When it finds a match, the result prints in the terminal and is also saved in
+`results/`.
+
+10. Verify the generated seed with the Zenon Dart SDK.
+
+Install Dart if needed, then run:
+
+```bash
+dart pub get
+dart run tools/validate_seed.dart <seed_hex_from_output> 0
+```
+
+The printed address must match the CUDA output.
 
 ## Easy Script
 
